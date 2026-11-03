@@ -724,40 +724,35 @@ namespace Panseo
             });
         }
 
-        // 점 커서: 실제 펜 굵기·색 그대로의 점 (어두운 바탕에서도 보이게 흰 테두리 + 얇은 검은 테두리)
+        // 점 커서: 실제 펜 굵기·색 그대로의 점 (테두리 없음)
         public static Cursor Dot(Color color, double diameter, double scale)
         {
-            double size = Math.Min(120, diameter + 6);
-            double c = size / 2, r = Math.Min(diameter, 114) / 2;
+            double size = Math.Min(120, diameter + 2);
+            double c = size / 2, r = Math.Min(diameter, 118) / 2;
             return Make(size, scale, c, c, dc =>
             {
-                var center = new Point(c, c);
-                dc.DrawEllipse(null, new Pen(Brushes.Black, 1), center, r + 1.6, r + 1.6);
-                dc.DrawEllipse(new SolidColorBrush(color), new Pen(Brushes.White, 1.4), center, r, r);
+                dc.DrawEllipse(new SolidColorBrush(color), null, new Point(c, c), r, r);
             });
         }
 
-        // 형광펜 점 커서: 실제 형광펜 크기의 반투명 네모
+        // 형광펜 점 커서: 실제 형광펜 크기의 반투명 네모 (테두리 없음)
         public static Cursor Block(Color color, double w, double h, double scale)
         {
-            w = Math.Min(w, 110); h = Math.Min(h, 110);
-            double size = Math.Max(w, h) + 6, c = size / 2;
+            w = Math.Min(w, 116); h = Math.Min(h, 116);
+            double size = Math.Max(w, h) + 2, c = size / 2;
             return Make(size, scale, c, c, dc =>
             {
-                var rect = new Rect(c - w / 2, c - h / 2, w, h);
-                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(0x99, color.R, color.G, color.B)), new Pen(Brushes.White, 1.2), rect);
-                rect.Inflate(1.2, 1.2);
-                dc.DrawRectangle(null, new Pen(Brushes.Black, 0.8), rect);
+                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(0x99, color.R, color.G, color.B)), null, new Rect(c - w / 2, c - h / 2, w, h));
             });
         }
 
-        // 십자 커서: 가는 십자선 + 가운데 색 점
+        // 십자 커서: 반투명한 가는 십자선 + 가운데 반투명 색 점
         public static Cursor Cross(Color color, double scale)
         {
             return Make(25, scale, 12.5, 12.5, dc =>
             {
-                var white = new Pen(Brushes.White, 3) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
-                var dark = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22)), 1.2);
+                var white = new Pen(new SolidColorBrush(Color.FromArgb(0x70, 0xFF, 0xFF, 0xFF)), 3) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+                var dark = new Pen(new SolidColorBrush(Color.FromArgb(0x90, 0x22, 0x22, 0x22)), 1.2);
                 foreach (var pen in new[] { white, dark })
                 {
                     dc.DrawLine(pen, new Point(1.5, 12.5), new Point(9, 12.5));
@@ -765,7 +760,7 @@ namespace Panseo
                     dc.DrawLine(pen, new Point(12.5, 1.5), new Point(12.5, 9));
                     dc.DrawLine(pen, new Point(12.5, 16), new Point(12.5, 23.5));
                 }
-                dc.DrawEllipse(new SolidColorBrush(color), new Pen(Brushes.White, 1), new Point(12.5, 12.5), 2.2, 2.2);
+                dc.DrawEllipse(new SolidColorBrush(Color.FromArgb(0xA0, color.R, color.G, color.B)), null, new Point(12.5, 12.5), 2.2, 2.2);
             });
         }
 
@@ -1410,16 +1405,19 @@ namespace Panseo
         }
 
         // 펜·형광펜 커서: 고른 모양과 크기대로
+        // 연필·십자·지우개 커서의 기본 크기 (1x일 때)
+        public const double CursorBase = 0.7;
+
         Cursor DrawCursor(bool highlighter, double sc)
         {
-            double s = sc * CursorScale;
+            double s = sc * CursorScale * CursorBase;
             Color c = highlighter ? HlColor : PenColor;
             switch (CursorKind)
             {
                 case CursorStyle.Dot:
                     // 실제로 그려지는 굵기 그대로 (너무 작으면 보이도록 최소 크기, 커서 크기 배율 적용)
-                    if (highlighter) return PenCursors.Block(c, Math.Max(PenSize * 2 + 2, 4 * CursorScale), Math.Max(PenSize * 4 + 10, 6 * CursorScale), sc);
-                    return PenCursors.Dot(c, Math.Max(PenSize, 5 * CursorScale), sc);
+                    if (highlighter) return PenCursors.Block(c, Math.Max(PenSize * 2 + 2, 3 * CursorScale), Math.Max(PenSize * 4 + 10, 4 * CursorScale), sc);
+                    return PenCursors.Dot(c, Math.Max(PenSize, 3 * CursorScale), sc);
                 case CursorStyle.Cross:
                     return PenCursors.Cross(c, s);
                 default:
@@ -1494,7 +1492,7 @@ namespace Panseo
                     break;
                 case Tool.EraseStroke:
                     ink.EditingMode = InkCanvasEditingMode.EraseByStroke;
-                    ink.Cursor = PenCursors.Eraser(sc * CursorScale);
+                    ink.Cursor = PenCursors.Eraser(sc * CursorScale * CursorBase);
                     break;
                 case Tool.ErasePoint:
                     double es = EraserDiameter;
