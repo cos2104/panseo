@@ -928,7 +928,7 @@ namespace Panseo
             A("size3", "굵기: 굵게 (8)", N, Key.D3, false),
             A("bg", "배경 바꾸기 (투명→흰판→칠판)", N, Key.B, false),
             A("undo", "되돌리기", C, Key.Z, false),
-            A("redo", "다시 실행", C, Key.Y, false),
+            A("redo", "다시 실행", CS, Key.Z, false),
             A("clear", "전체 삭제", N, Key.Delete, false),
             A("capture", "화면 저장", C, Key.S, false),
             A("color1", "색: 검정", N, Key.None, false),
@@ -959,6 +959,8 @@ namespace Panseo
                 string s = Settings.Get("key." + a.Id);
                 if (s == null) continue;
                 var c = KeyCombo.Parse(s);
+                // 다시 실행의 예전 기본값(Ctrl+Y)이 그대로 저장돼 있으면 새 기본값(Ctrl+Shift+Z)으로
+                if (c != null && a.Id == "redo" && c.Key == Key.Y && c.Mods == ModifierKeys.Control && !c.Global) continue;
                 if (c != null) d[a.Id] = c;
             }
             return d;
@@ -982,7 +984,7 @@ namespace Panseo
         public Color PenColor = Color.FromRgb(0xE5, 0x39, 0x35);
         public Color HlColor = Color.FromRgb(0xFD, 0xD8, 0x35);
         public double PenSize = 4;
-        public const string Version = "v29";
+        public const string Version = "v30";
         public BoardBg Bg = BoardBg.Transparent;
         public event Action ToolStateChanged;
         public static readonly double[] PenSizes = { 2, 4, 8 };
