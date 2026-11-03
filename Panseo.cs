@@ -204,7 +204,46 @@ namespace Panseo
         // 새 버전을 올리는 GitHub 저장소 (소유자/저장소 이름)
         public const string Repo = "cos2104/panseo";
 
-        public class Release { public string Tag, Notes, Url; }
+        public class Release { public string Tag, Notes, Url, PluginUrl; }
+
+        // ---- Stream Deck 플러그인 ----
+        public static bool StreamDeckInstalled
+        {
+            get
+            {
+                string pf = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+                return File.Exists(System.IO.Path.Combine(pf, "Elgato", "StreamDeck", "StreamDeck.exe"));
+            }
+        }
+
+        public static bool PluginInstalled
+        {
+            get
+            {
+                return Directory.Exists(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "Elgato", "StreamDeck", "Plugins", "com.cos2104.panseo.sdPlugin"));
+            }
+        }
+
+        // 최신 릴리스의 플러그인 설치 파일을 받아서 열기 (Stream Deck 앱이 설치 확인 창을 띄움). 성공하면 null
+        public static string InstallPlugin()
+        {
+            try
+            {
+                var rel = CheckLatest();
+                if (rel == null || rel.PluginUrl == null) return "GitHub에서 플러그인을 찾지 못했습니다 (인터넷 연결을 확인해 주세요)";
+                UseTls12();
+                string file = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "com.cos2104.panseo.streamDeckPlugin");
+                using (var wc = new System.Net.WebClient())
+                {
+                    wc.Headers.Add("User-Agent", "Panseo-Updater");
+                    wc.DownloadFile(rel.PluginUrl, file);
+                }
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(file) { UseShellExecute = true });
+                return null;
+            }
+            catch (Exception ex) { return ex.Message; }
+        }
 
         static string ExePath { get { return System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName; } }
         static string NewPath { get { return System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Panseo_update.exe"); } }
@@ -246,9 +285,11 @@ namespace Panseo
                     {
                         var a = o as Dictionary<string, object>;
                         var name = a == null ? null : a["name"] as string;
-                        if (name != null && name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase)) { rel.Url = a["browser_download_url"] as string; break; }
+                        if (name == null) continue;
+                        if (name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && rel.Url == null) rel.Url = a["browser_download_url"] as string;
+                        if (name.EndsWith(".streamDeckPlugin", StringComparison.OrdinalIgnoreCase)) rel.PluginUrl = a["browser_download_url"] as string;
                     }
-                return rel.Url == null ? null : rel;
+                return rel.Url == null && rel.PluginUrl == null ? null : rel;
             }
             catch { return null; }
         }
@@ -2243,7 +2284,7 @@ namespace Panseo
             // 머리글 (끌어서 이동, 단축키 설정, 접기)
             var header = new DockPanel { Margin = new Thickness(4, 0, 0, 2) };
             var collapse = Flat(Glyph("", 12), "도구 접기/펴기", 24, 22);
-            var gear = Flat(Glyph("", 13), "단축키 설정", 24, 22);
+            var gear = Flat(Glyph("", 13), "단축키 설정 · Stream Deck 플러그인", 24, 22);
             DockPanel.SetDock(collapse, Dock.Right);
             DockPanel.SetDock(gear, Dock.Right);
             header.Children.Add(collapse);
@@ -2444,7 +2485,7 @@ namespace Panseo
         async void CheckUpdate()
         {
             var r = await Task.Run(() => Updater.CheckLatest());
-            if (r == null || Updater.Number(r.Tag) <= Updater.Number(OverlayWindow.Version)) return;
+            if (r == null || r.Url == null || Updater.Number(r.Tag) <= Updater.Number(OverlayWindow.Version)) return;
             latest = r;
             updateBtn.ToolTip = "새 버전 " + r.Tag + "이(가) 있습니다. 눌러서 업데이트" + (string.IsNullOrEmpty(r.Notes) ? "" : "\n\n" + r.Notes);
             AutomationProperties.SetName(updateBtn, "업데이트 " + r.Tag);
@@ -3776,8 +3817,31 @@ namespace Panseo
             buttons.Children.Add(reset);
             buttons.Children.Add(cancel);
             buttons.Children.Add(save);
-            DockPanel.SetDock(buttons, Dock.Bottom);
-            dock.Children.Add(buttons);
+            // 아래 줄: 왼쪽 Stream Deck 플러그인 버튼(Stream Deck이 있는 PC에서만), 오른쪽 저장·취소
+            var bottomRow = new DockPanel { Margin = new Thickness(0, 10, 0, 0) };
+            buttons.Margin = new Thickness(0);
+            DockPanel.SetDock(buttons, Dock.Right);
+            bottomRow.Children.Add(buttons);
+            if (Updater.StreamDeckInstalled)
+            {
+                var deck = new Button
+                {
+                    Content = Updater.PluginInstalled ? "Stream Deck 플러그인 업데이트" : "Stream Deck 플러그인 설치",
+                    Padding = new Thickness(12, 4, 12, 4), HorizontalAlignment = HorizontalAlignment.Left,
+                    ToolTip = "GitHub 최신 릴리스에서 판서 Stream Deck 플러그인을 받아 설치합니다"
+                };
+                deck.Click += async (s, e) =>
+                {
+                    deck.IsEnabled = false;
+                    status.Text = "Stream Deck 플러그인 내려받는 중...";
+                    string err = await Task.Run(() => Updater.InstallPlugin());
+                    status.Text = err == null ? "Stream Deck 앱에서 설치 확인 창의 [설치]를 눌러 주세요." : "플러그인 설치 실패: " + err;
+                    deck.IsEnabled = true;
+                };
+                bottomRow.Children.Add(deck);
+            }
+            DockPanel.SetDock(bottomRow, Dock.Bottom);
+            dock.Children.Add(bottomRow);
 
             status = new TextBlock { Foreground = Brushes.Chocolate, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 8, 0, 0) };
             DockPanel.SetDock(status, Dock.Bottom);
