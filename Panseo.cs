@@ -1390,7 +1390,7 @@ namespace Panseo
         // ---------- 커서 모양 ----------
         public CursorStyle CursorKind = CursorStyle.Pencil;
         public double CursorScale = 1;
-        public static readonly double[] CursorScales = { 1, 1.5, 2, 0.75 };
+        public static readonly double[] CursorScales = { 1, 1.5, 2, 0.5, 0.75 };
 
         public void SetCursorStyle(CursorStyle style)
         {
@@ -2238,7 +2238,7 @@ namespace Panseo
                 cursors.Children.Add(b);
             }
             cursorScaleLabel = new TextBlock { FontSize = 10.5 };
-            var scaleBtn = Flat(cursorScaleLabel, "커서 크기 (누를 때마다 1배 → 1.5배 → 2배 → 0.75배)", 26, 30);
+            var scaleBtn = Flat(cursorScaleLabel, "커서 크기 (누를 때마다 1배 → 1.5배 → 2배 → 0.5배 → 0.75배)", 26, 30);
             scaleBtn.Click += (s, e) => ov.CycleCursorScale();
             cursors.Children.Add(scaleBtn);
             body.Children.Add(cursors);
