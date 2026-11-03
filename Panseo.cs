@@ -1415,9 +1415,9 @@ namespace Panseo
             switch (CursorKind)
             {
                 case CursorStyle.Dot:
-                    // 실제로 그려지는 굵기 그대로 (너무 작으면 보이도록 최소 크기, 커서 크기 배율 적용)
-                    if (highlighter) return PenCursors.Block(c, Math.Max(PenSize * 2 + 2, 3 * CursorScale), Math.Max(PenSize * 4 + 10, 4 * CursorScale), sc);
-                    return PenCursors.Dot(c, Math.Max(PenSize, 3 * CursorScale), sc);
+                    // 실제로 그려지는 굵기와 똑같은 크기 (커서 크기 배율은 적용하지 않음)
+                    if (highlighter) return PenCursors.Block(c, PenSize * 2 + 2, PenSize * 4 + 10, sc);
+                    return PenCursors.Dot(c, PenSize, sc);
                 case CursorStyle.Cross:
                     return PenCursors.Cross(c, s);
                 default:
