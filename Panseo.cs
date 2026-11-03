@@ -136,6 +136,67 @@ namespace Panseo
         }
     }
 
+    // ================= 외부 명령 통로 (Stream Deck 플러그인용) =================
+    // 같은 PC 안에서만 열리는 이름 있는 파이프(\\.\pipe\Panseo). 연결 하나로 여러 줄 명령을 주고받음
+    class CommandServer
+    {
+        public const string PipeName = "Panseo";
+        readonly OverlayWindow ov;
+        volatile bool running = true;
+
+        public CommandServer(OverlayWindow o)
+        {
+            ov = o;
+            new System.Threading.Thread(Loop) { IsBackground = true, Name = "PanseoCommands" }.Start();
+        }
+
+        public void Stop() { running = false; }
+
+        void Loop()
+        {
+            while (running)
+            {
+                System.IO.Pipes.NamedPipeServerStream pipe = null;
+                try
+                {
+                    pipe = new System.IO.Pipes.NamedPipeServerStream(PipeName, System.IO.Pipes.PipeDirection.InOut,
+                        System.IO.Pipes.NamedPipeServerStream.MaxAllowedServerInstances,
+                        System.IO.Pipes.PipeTransmissionMode.Byte, System.IO.Pipes.PipeOptions.None);
+                    pipe.WaitForConnection();
+                    var conn = pipe;
+                    pipe = null;
+                    System.Threading.ThreadPool.QueueUserWorkItem(_ => Serve(conn));
+                }
+                catch
+                {
+                    if (pipe != null) pipe.Dispose();
+                    System.Threading.Thread.Sleep(500);
+                }
+            }
+        }
+
+        void Serve(System.IO.Pipes.NamedPipeServerStream conn)
+        {
+            using (conn)
+            {
+                try
+                {
+                    var enc = new UTF8Encoding(false);
+                    var reader = new StreamReader(conn, enc);
+                    var writer = new StreamWriter(conn, enc) { AutoFlush = true, NewLine = "\n" };
+                    string line;
+                    while (running && (line = reader.ReadLine()) != null)
+                    {
+                        string cmd = line, reply = null;
+                        ov.Dispatcher.Invoke(new Action(() => reply = ov.ExecuteExternal(cmd)));
+                        writer.WriteLine(reply);
+                    }
+                }
+                catch { } // 연결이 끊기면 끝
+            }
+        }
+    }
+
     // ================= 업데이트 (GitHub 릴리스) =================
     // GitHub 저장소의 최신 릴리스에 올린 Panseo.exe를 받아서, 실행 중인 파일과 바꾼 뒤 다시 실행
     static class Updater
@@ -984,7 +1045,7 @@ namespace Panseo
         public Color PenColor = Color.FromRgb(0xE5, 0x39, 0x35);
         public Color HlColor = Color.FromRgb(0xFD, 0xD8, 0x35);
         public double PenSize = 4;
-        public const string Version = "v30";
+        public const string Version = "v31";
         public BoardBg Bg = BoardBg.Transparent;
         public event Action ToolStateChanged;
         public static readonly double[] PenSizes = { 2, 4, 8 };
@@ -1156,9 +1217,11 @@ namespace Panseo
                 ApplyTool();
                 if (Settings.Get("scrollfollow") == "1") { follower = new ScrollFollower(this); follower.Start(); SetWheelHook(true); Notify(); }
                 if (startupMessage != null) ShowToast(startupMessage);
+                commandServer = new CommandServer(this); // Stream Deck 플러그인 등이 명령을 보내는 통로
             };
             Closed += (s, e) =>
             {
+                if (commandServer != null) commandServer.Stop();
                 Settings.Set("pensize", PenSize.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 UnregisterGlobalHotkeys();
                 if (follower != null) follower.Stop();
@@ -1992,6 +2055,63 @@ namespace Panseo
         {
             Action a;
             if (actions.TryGetValue(id, out a)) a();
+        }
+
+        // ---------- 외부 명령 (Stream Deck 플러그인) ----------
+        CommandServer commandServer;
+
+        // 한 줄 명령 실행 후 지금 상태를 JSON으로 돌려줌
+        //   run <동작>      : 단축키 동작 이름 그대로 (pen, highlighter, undo, zoom, color3 ...)
+        //   color #RRGGBB   : 펜(형광펜) 색
+        //   bg transparent|white|chalk
+        //   size <굵기>
+        //   state           : 상태만
+        public string ExecuteExternal(string line)
+        {
+            try
+            {
+                string[] p = (line ?? "").Trim().Split(new[] { ' ' }, 2);
+                string arg = p.Length > 1 ? p[1].Trim() : "";
+                switch (p[0])
+                {
+                    case "run":
+                        Run(arg);
+                        break;
+                    case "color":
+                        SetColor((Color)ColorConverter.ConvertFromString(arg));
+                        break;
+                    case "bg":
+                        SetBg(arg == "white" ? BoardBg.White : arg == "chalk" ? BoardBg.Chalk : BoardBg.Transparent);
+                        break;
+                    case "size":
+                        double v;
+                        if (double.TryParse(arg, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out v)) SetPenSize(v);
+                        break;
+                }
+            }
+            catch { }
+            return StateJson();
+        }
+
+        string StateJson()
+        {
+            var c = ActiveColor;
+            var d = new Dictionary<string, object>
+            {
+                { "version", Version },
+                { "tool", CurrentTool.ToString() },
+                { "shape", Shape.ToString() },
+                { "color", string.Format("#{0:X2}{1:X2}{2:X2}", c.R, c.G, c.B) },
+                { "size", PenSize },
+                { "bg", Bg.ToString() },
+                { "zooming", Zooming },
+                { "selecting", Selecting },
+                { "zoom", Math.Round(Zoom, 1) },
+                { "hidden", InkHidden },
+                { "scrollFollow", ScrollFollow },
+                { "exe", System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName }
+            };
+            return new System.Web.Script.Serialization.JavaScriptSerializer().Serialize(d);
         }
 
         public void RegisterGlobalHotkeys()

@@ -1,3 +1,7 @@
 # 빌드 결과물은 저장소 대신 릴리스에 올림
 *.exe
 *.exe.old
+
+# Stream Deck 플러그인 빌드 결과 (build.bat 이 만듦)
+streamdeck/com.cos2104.panseo.sdPlugin/
+streamdeck/dist/
