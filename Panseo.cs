@@ -667,12 +667,15 @@ namespace Panseo
             return g;
         }
 
+        const double PencilOpacity = 0.6; // 연필·형광펜 커서 반투명
+
         // 연필: 끝(펜촉)이 왼쪽 아래, 펜촉에 현재 색 표시
         public static Cursor Pen(Color c, double scale)
         {
             return Make(32, scale, 1.5, 30.5, dc =>
             {
                 var tip = new SolidColorBrush(c);
+                dc.PushOpacity(PencilOpacity);
                 dc.PushTransform(new TranslateTransform(1.5, 30.5));
                 dc.PushTransform(new RotateTransform(-45));
                 dc.DrawRectangle(Brushes.White, Outline, new Rect(10, -4.5, 26, 9));
@@ -680,7 +683,7 @@ namespace Panseo
                 dc.DrawGeometry(new SolidColorBrush(Color.FromRgb(0xF3, 0xD9, 0xA4)), Outline,
                     Poly(new Point(0, 0), new Point(10, -4.5), new Point(10, 4.5)));
                 dc.DrawGeometry(tip, Outline, Poly(new Point(0, 0), new Point(4.5, -2), new Point(4.5, 2)));
-                dc.Pop(); dc.Pop();
+                dc.Pop(); dc.Pop(); dc.Pop();
             });
         }
 
@@ -689,12 +692,13 @@ namespace Panseo
             return Make(32, scale, 2, 30, dc =>
             {
                 var tip = new SolidColorBrush(c);
+                dc.PushOpacity(PencilOpacity);
                 dc.PushTransform(new TranslateTransform(2, 30));
                 dc.PushTransform(new RotateTransform(-45));
                 dc.DrawRectangle(Brushes.White, Outline, new Rect(11, -6, 24, 12));
                 dc.DrawRectangle(tip, null, new Rect(29, -5.4, 5.4, 10.8));
                 dc.DrawGeometry(tip, Outline, Poly(new Point(0, -3.5), new Point(0, 3.5), new Point(11, 6), new Point(11, -6)));
-                dc.Pop(); dc.Pop();
+                dc.Pop(); dc.Pop(); dc.Pop();
             });
         }
 
@@ -1407,6 +1411,7 @@ namespace Panseo
         // 펜·형광펜 커서: 고른 모양과 크기대로
         // 연필·십자·지우개 커서의 기본 크기 (1x일 때)
         public const double CursorBase = 0.7;
+        public const double PencilBase = 0.5; // 연필 커서는 더 작게
 
         Cursor DrawCursor(bool highlighter, double sc)
         {
@@ -1421,7 +1426,8 @@ namespace Panseo
                 case CursorStyle.Cross:
                     return PenCursors.Cross(c, s);
                 default:
-                    return highlighter ? PenCursors.Highlighter(c, s) : PenCursors.Pen(c, s);
+                    double ps = sc * CursorScale * PencilBase;
+                    return highlighter ? PenCursors.Highlighter(c, ps) : PenCursors.Pen(c, ps);
             }
         }
 
