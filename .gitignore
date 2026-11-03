@@ -8,3 +8,7 @@ streamdeck/dist/
 
 # 구글 드라이브 임시 폴더
 .tmp.driveupload/
+
+# 인증키 비밀키·발급 기록 (절대 올리지 말 것)
+keygen/private.key
+keygen/issued.txt

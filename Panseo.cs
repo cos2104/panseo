@@ -124,6 +124,8 @@ namespace Panseo
                 }
             Updater.CleanupOld(); // 지난 업데이트에서 남은 예전 파일 정리
             var app = new Application();
+            app.ShutdownMode = ShutdownMode.OnExplicitShutdown; // 인증 창을 닫아도 앱이 먼저 끝나지 않게
+            if (!License.Ensure()) return;
             app.ShutdownMode = ShutdownMode.OnMainWindowClose;
             var overlay = new OverlayWindow();
             app.MainWindow = overlay;
@@ -133,6 +135,156 @@ namespace Panseo
             toolbar.Show();
             overlay.PlaceToolbar(true);
             app.Run();
+        }
+    }
+
+    // ================= 인증 (PC마다 인증키) =================
+    // PC 번호 = 이 PC의 MachineGuid 해시. 인증키 = 개발자 비밀키로 "PC 번호|이름"에 서명한 것(ECDSA P-256).
+    // 앱에는 공개키만 들어 있어 키를 확인할 수는 있어도 새로 만들 수는 없음. 키는 keygen\PanseoKey.exe 가 만듦
+    static class License
+    {
+        const string PublicKey = "RUNTMSAAAABak8u3FItyRCc1mlGj31szXo0hy4gSXQ/N9g2DEDHBkELVkBODReOo2tDOOgRUu35bQBvD5EuZys1+30u9o126";
+        const string Alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"; // 헷갈리는 0·1·I·O 뺌
+        public static string Holder; // 인증된 이름
+
+        static string id;
+        public static string MachineId()
+        {
+            if (id != null) return id;
+            string guid = null;
+            try
+            {
+                using (var hk = Microsoft.Win32.RegistryKey.OpenBaseKey(Microsoft.Win32.RegistryHive.LocalMachine, Microsoft.Win32.RegistryView.Registry64))
+                using (var k = hk.OpenSubKey(@"SOFTWARE\Microsoft\Cryptography"))
+                    if (k != null) guid = k.GetValue("MachineGuid") as string;
+            }
+            catch { }
+            if (string.IsNullOrEmpty(guid)) guid = Environment.MachineName;
+            byte[] h;
+            using (var sha = System.Security.Cryptography.SHA256.Create())
+                h = sha.ComputeHash(Encoding.UTF8.GetBytes("panseo|" + guid.ToLowerInvariant()));
+            var sb = new StringBuilder();
+            int bits = 0, val = 0;
+            for (int i = 0; i < 10; i++) // 80비트 → 16자
+            {
+                val = ((val << 8) | h[i]) & 0xFFFF;
+                bits += 8;
+                while (bits >= 5) { bits -= 5; sb.Append(Alphabet[(val >> bits) & 31]); }
+            }
+            string t = sb.ToString();
+            id = t.Substring(0, 4) + "-" + t.Substring(4, 4) + "-" + t.Substring(8, 4) + "-" + t.Substring(12, 4);
+            return id;
+        }
+
+        // 붙여 넣을 때 섞인 빈칸·줄바꿈은 무시
+        public static string Clean(string key)
+        {
+            if (key == null) return "";
+            var sb = new StringBuilder();
+            foreach (char c in key) if (!char.IsWhiteSpace(c)) sb.Append(c);
+            return sb.ToString();
+        }
+
+        public static bool Check(string key, out string name)
+        {
+            name = null;
+            var parts = Clean(key).Split('.');
+            if (parts.Length != 3 || parts[0] != "P1") return false;
+            try
+            {
+                string n = Encoding.UTF8.GetString(FromB64(parts[1]));
+                byte[] msg = Encoding.UTF8.GetBytes("panseo1|" + MachineId() + "|" + n);
+                using (var cng = System.Security.Cryptography.CngKey.Import(Convert.FromBase64String(PublicKey), System.Security.Cryptography.CngKeyBlobFormat.EccPublicBlob))
+                using (var ec = new System.Security.Cryptography.ECDsaCng(cng))
+                {
+                    ec.HashAlgorithm = System.Security.Cryptography.CngAlgorithm.Sha256;
+                    if (!ec.VerifyData(msg, FromB64(parts[2]))) return false;
+                }
+                name = n;
+                return true;
+            }
+            catch { return false; }
+        }
+
+        static byte[] FromB64(string s)
+        {
+            s = s.Replace('-', '+').Replace('_', '/');
+            while (s.Length % 4 != 0) s += "=";
+            return Convert.FromBase64String(s);
+        }
+
+        // 저장된 키가 맞으면 통과, 아니면 인증 창
+        public static bool Ensure()
+        {
+            string name;
+            if (Check(Settings.Get("license"), out name)) { Holder = name; return true; }
+            return new LicenseWindow().ShowDialog() == true;
+        }
+    }
+
+    public class LicenseWindow : Window
+    {
+        public LicenseWindow()
+        {
+            Title = "판서 인증";
+            Width = 440;
+            SizeToContent = SizeToContent.Height;
+            ResizeMode = ResizeMode.NoResize;
+            WindowStartupLocation = WindowStartupLocation.CenterScreen;
+            Topmost = true;
+            FontFamily = new FontFamily("Malgun Gothic");
+            FontSize = 13;
+
+            var sp = new StackPanel { Margin = new Thickness(16) };
+            sp.Children.Add(new TextBlock { Text = "PC 번호", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 4) });
+            var idRow = new DockPanel();
+            var copy = new Button { Content = "복사", Padding = new Thickness(12, 3, 12, 3), Margin = new Thickness(6, 0, 0, 0) };
+            DockPanel.SetDock(copy, Dock.Right);
+            idRow.Children.Add(copy);
+            var idBox = new TextBox { Text = License.MachineId(), IsReadOnly = true, FontFamily = new FontFamily("Consolas"), FontSize = 16, Padding = new Thickness(4, 2, 4, 2) };
+            idRow.Children.Add(idBox);
+            sp.Children.Add(idRow);
+
+            sp.Children.Add(new TextBlock { Text = "인증키", FontWeight = FontWeights.Bold, Margin = new Thickness(0, 14, 0, 4) });
+            var keyBox = new TextBox { Height = 64, TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas"), Padding = new Thickness(4, 2, 4, 2) };
+            sp.Children.Add(keyBox);
+            var status = new TextBlock { Foreground = Brushes.Firebrick, Margin = new Thickness(0, 6, 0, 0), MinHeight = 18 };
+            sp.Children.Add(status);
+
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 8, 0, 0) };
+            var ok = new Button { Content = "확인", Padding = new Thickness(18, 4, 18, 4), Margin = new Thickness(0, 0, 8, 0), IsDefault = true, FontWeight = FontWeights.Bold };
+            var close = new Button { Content = "닫기", Padding = new Thickness(18, 4, 18, 4), IsCancel = true };
+            buttons.Children.Add(ok);
+            buttons.Children.Add(close);
+            sp.Children.Add(buttons);
+            Content = sp;
+
+            copy.Click += (s, e) =>
+            {
+                try { Clipboard.SetText(idBox.Text); status.Foreground = Brushes.SeaGreen; status.Text = "복사했습니다."; } catch { }
+            };
+            ok.Click += (s, e) =>
+            {
+                string name;
+                if (License.Check(keyBox.Text, out name))
+                {
+                    Settings.Set("license", License.Clean(keyBox.Text));
+                    License.Holder = name;
+                    DialogResult = true;
+                }
+                else { status.Foreground = Brushes.Firebrick; status.Text = "인증키가 맞지 않습니다."; }
+            };
+            // 클립보드에 이 PC의 키가 있으면 미리 채움
+            Loaded += (s, e) =>
+            {
+                try
+                {
+                    string clip = Clipboard.ContainsText() ? Clipboard.GetText() : null, name;
+                    if (License.Check(clip, out name)) keyBox.Text = License.Clean(clip);
+                }
+                catch { }
+                keyBox.Focus();
+            };
         }
     }
 
@@ -1086,7 +1238,7 @@ namespace Panseo
         public Color PenColor = Color.FromRgb(0xE5, 0x39, 0x35);
         public Color HlColor = Color.FromRgb(0xFD, 0xD8, 0x35);
         public double PenSize = 4;
-        public const string Version = "v31";
+        public const string Version = "v32";
         public BoardBg Bg = BoardBg.Transparent;
         public event Action ToolStateChanged;
         public static readonly double[] PenSizes = { 2, 4, 8 };
