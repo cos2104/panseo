@@ -30,6 +30,12 @@
 - 판서가 꺼져 있을 때 버튼을 누르면 판서를 켭니다.
 - 플러그인 소스는 `streamdeck/` 폴더(`build.bat`로 빌드)에 있습니다.
 
+## 인증키 (이 저장소는 비공개, 배포는 공개 저장소 cos2104/panseo 릴리스)
+
+- 처음 실행하면 PC 번호(MachineGuid 해시 16자)가 나오고, 그 PC용 인증키를 넣어야 실행됩니다. 키는 `settings.ini`의 `license=`에 저장됩니다.
+- 키는 `keygen\PanseoKey.exe`(PC 번호·이름 → 만들기 → 복사)로 만듭니다. 만든 키는 `keygen\issued.txt`에 쌓입니다.
+- `keygen\private.key`는 비밀키입니다. 저장소에 올리지 않으며(.gitignore), 잃어버리면 새 키를 만들 수 없으니 따로 백업해 둡니다.
+
 ## 직접 빌드하기
 
 `build.bat`를 실행하면 Windows에 들어 있는 C# 컴파일러로 `Panseo.exe`를 만듭니다. 별도 설치가 필요 없습니다.
