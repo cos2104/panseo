@@ -26,6 +26,7 @@ namespace Panseo
 {
     public enum Tool { Mouse, Pen, Highlighter, EraseStroke, ErasePoint, Pan, Text, Shape }
     public enum ShapeKind { Line, Arrow, Rect, Ellipse }
+    public enum CursorStyle { Pencil, Dot, Cross }
     public enum BoardBg { Transparent, White, Chalk }
 
     class Change
@@ -723,6 +724,51 @@ namespace Panseo
             });
         }
 
+        // 점 커서: 실제 펜 굵기·색 그대로의 점 (어두운 바탕에서도 보이게 흰 테두리 + 얇은 검은 테두리)
+        public static Cursor Dot(Color color, double diameter, double scale)
+        {
+            double size = Math.Min(120, diameter + 6);
+            double c = size / 2, r = Math.Min(diameter, 114) / 2;
+            return Make(size, scale, c, c, dc =>
+            {
+                var center = new Point(c, c);
+                dc.DrawEllipse(null, new Pen(Brushes.Black, 1), center, r + 1.6, r + 1.6);
+                dc.DrawEllipse(new SolidColorBrush(color), new Pen(Brushes.White, 1.4), center, r, r);
+            });
+        }
+
+        // 형광펜 점 커서: 실제 형광펜 크기의 반투명 네모
+        public static Cursor Block(Color color, double w, double h, double scale)
+        {
+            w = Math.Min(w, 110); h = Math.Min(h, 110);
+            double size = Math.Max(w, h) + 6, c = size / 2;
+            return Make(size, scale, c, c, dc =>
+            {
+                var rect = new Rect(c - w / 2, c - h / 2, w, h);
+                dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(0x99, color.R, color.G, color.B)), new Pen(Brushes.White, 1.2), rect);
+                rect.Inflate(1.2, 1.2);
+                dc.DrawRectangle(null, new Pen(Brushes.Black, 0.8), rect);
+            });
+        }
+
+        // 십자 커서: 가는 십자선 + 가운데 색 점
+        public static Cursor Cross(Color color, double scale)
+        {
+            return Make(25, scale, 12.5, 12.5, dc =>
+            {
+                var white = new Pen(Brushes.White, 3) { StartLineCap = PenLineCap.Round, EndLineCap = PenLineCap.Round };
+                var dark = new Pen(new SolidColorBrush(Color.FromRgb(0x22, 0x22, 0x22)), 1.2);
+                foreach (var pen in new[] { white, dark })
+                {
+                    dc.DrawLine(pen, new Point(1.5, 12.5), new Point(9, 12.5));
+                    dc.DrawLine(pen, new Point(16, 12.5), new Point(23.5, 12.5));
+                    dc.DrawLine(pen, new Point(12.5, 1.5), new Point(12.5, 9));
+                    dc.DrawLine(pen, new Point(12.5, 16), new Point(12.5, 23.5));
+                }
+                dc.DrawEllipse(new SolidColorBrush(color), new Pen(Brushes.White, 1), new Point(12.5, 12.5), 2.2, 2.2);
+            });
+        }
+
         static Cursor Make(double sizeDip, double scale, double hx, double hy, Action<DrawingContext> draw)
         {
             int px = Math.Min(250, (int)Math.Ceiling(sizeDip * scale));
@@ -937,7 +983,7 @@ namespace Panseo
         public Color PenColor = Color.FromRgb(0xE5, 0x39, 0x35);
         public Color HlColor = Color.FromRgb(0xFD, 0xD8, 0x35);
         public double PenSize = 4;
-        public const string Version = "v28";
+        public const string Version = "v29";
         public BoardBg Bg = BoardBg.Transparent;
         public event Action ToolStateChanged;
         public static readonly double[] PenSizes = { 2, 4, 8 };
@@ -1005,6 +1051,12 @@ namespace Panseo
             double savedSize;
             if (double.TryParse(Settings.Get("pensize") ?? "", System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out savedSize))
                 PenSize = ClampSize(savedSize);
+            // 커서 모양·크기 (지난번에 고른 것)
+            CursorStyle savedStyle;
+            if (Enum.TryParse(Settings.Get("cursorstyle") ?? "", out savedStyle)) CursorKind = savedStyle;
+            double savedScale;
+            if (double.TryParse(Settings.Get("cursorscale") ?? "", System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out savedScale)
+                && Array.IndexOf(CursorScales, savedScale) >= 0) CursorScale = savedScale;
 
             var grid = new Grid();
             // 흰판·칠판 배경은 판서 층과 따로 두어, 필기를 숨겨도 배경은 남도록
@@ -1336,6 +1388,45 @@ namespace Panseo
         }
 
         // ---------- 도형 ----------
+        // ---------- 커서 모양 ----------
+        public CursorStyle CursorKind = CursorStyle.Pencil;
+        public double CursorScale = 1;
+        public static readonly double[] CursorScales = { 1, 1.5, 2, 0.75 };
+
+        public void SetCursorStyle(CursorStyle style)
+        {
+            CursorKind = style;
+            Settings.Set("cursorstyle", style.ToString());
+            if (CurrentTool != Tool.Pen && CurrentTool != Tool.Highlighter) SetTool(LastDrawTool); // 고르면 바로 펜으로 써 볼 수 있게
+            else ApplyTool();
+        }
+
+        public void CycleCursorScale()
+        {
+            int i = Array.IndexOf(CursorScales, CursorScale);
+            CursorScale = CursorScales[(i + 1) % CursorScales.Length];
+            Settings.Set("cursorscale", CursorScale.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            ApplyTool();
+        }
+
+        // 펜·형광펜 커서: 고른 모양과 크기대로
+        Cursor DrawCursor(bool highlighter, double sc)
+        {
+            double s = sc * CursorScale;
+            Color c = highlighter ? HlColor : PenColor;
+            switch (CursorKind)
+            {
+                case CursorStyle.Dot:
+                    // 실제로 그려지는 굵기 그대로 (너무 작으면 보이도록 최소 크기, 커서 크기 배율 적용)
+                    if (highlighter) return PenCursors.Block(c, Math.Max(PenSize * 2 + 2, 4 * CursorScale), Math.Max(PenSize * 4 + 10, 6 * CursorScale), sc);
+                    return PenCursors.Dot(c, Math.Max(PenSize, 5 * CursorScale), sc);
+                case CursorStyle.Cross:
+                    return PenCursors.Cross(c, s);
+                default:
+                    return highlighter ? PenCursors.Highlighter(c, s) : PenCursors.Pen(c, s);
+            }
+        }
+
         public void SetShape(ShapeKind kind)
         {
             Shape = kind;
@@ -1390,7 +1481,7 @@ namespace Panseo
                         FitToCurve = true, IgnorePressure = false, StylusTip = StylusTip.Ellipse
                     };
                     ink.EditingMode = InkCanvasEditingMode.Ink;
-                    ink.Cursor = PenCursors.Pen(PenColor, sc);
+                    ink.Cursor = DrawCursor(false, sc);
                     break;
                 case Tool.Highlighter:
                     ink.DefaultDrawingAttributes = new DrawingAttributes
@@ -1399,11 +1490,11 @@ namespace Panseo
                         IsHighlighter = true, FitToCurve = true, IgnorePressure = true, StylusTip = StylusTip.Rectangle
                     };
                     ink.EditingMode = InkCanvasEditingMode.Ink;
-                    ink.Cursor = PenCursors.Highlighter(HlColor, sc);
+                    ink.Cursor = DrawCursor(true, sc);
                     break;
                 case Tool.EraseStroke:
                     ink.EditingMode = InkCanvasEditingMode.EraseByStroke;
-                    ink.Cursor = PenCursors.Eraser(sc);
+                    ink.Cursor = PenCursors.Eraser(sc * CursorScale);
                     break;
                 case Tool.ErasePoint:
                     double es = EraserDiameter;
@@ -1960,7 +2051,7 @@ namespace Panseo
         readonly Dictionary<Button, Func<bool>> activeMap = new Dictionary<Button, Func<bool>>();
         readonly List<TipInfo> tips = new List<TipInfo>();
         readonly StackPanel body;
-        TextBlock zoomLabel, monitorLabel, sizeHeader;
+        TextBlock zoomLabel, monitorLabel, sizeHeader, cursorScaleLabel;
         Slider sizeSlider;
         Ellipse sizePreview;
         bool refreshing;
@@ -2128,6 +2219,25 @@ namespace Panseo
             sizeRow.ToolTip = "굵기 조절 (마우스 휠로도 조절)";
             AutomationProperties.SetName(sizeSlider, "굵기");
             body.Children.Add(sizeRow);
+
+            // 커서 모양·크기
+            body.Children.Add(Section("커서"));
+            var cursors = new UniformGrid { Columns = 4 };
+            string[] curGlyphs = { "✎", "●", "＋" };
+            string[] curNames = { "연필 (펜촉 끝이 찍히는 곳)", "점 (실제 굵기·색 그대로)", "십자" };
+            for (int i = 0; i < 3; i++)
+            {
+                var style = (CursorStyle)i;
+                var b = Flat(new TextBlock { Text = curGlyphs[i], FontSize = 15, FontFamily = new FontFamily("Segoe UI Symbol") }, "커서: " + curNames[i], 26, 30);
+                b.Click += (s, e) => ov.SetCursorStyle(style);
+                Track(b, () => ov.CursorKind == style);
+                cursors.Children.Add(b);
+            }
+            cursorScaleLabel = new TextBlock { FontSize = 10.5 };
+            var scaleBtn = Flat(cursorScaleLabel, "커서 크기 (누를 때마다 1배 → 1.5배 → 2배 → 0.75배)", 26, 30);
+            scaleBtn.Click += (s, e) => ov.CycleCursorScale();
+            cursors.Children.Add(scaleBtn);
+            body.Children.Add(cursors);
 
             // 배경
             body.Children.Add(Section("배경"));
@@ -2353,6 +2463,7 @@ namespace Panseo
         {
             foreach (var b in activeMap.Keys) Paint(b);
             zoomLabel.Text = ov.Zooming ? ov.Zoom.ToString("0.0") + "배" : (ov.Selecting ? "위치 선택" : "확대");
+            cursorScaleLabel.Text = ov.CursorScale.ToString("0.##") + "x";
             refreshing = true;
             sizeSlider.Value = Math.Sqrt((ov.PenSize - OverlayWindow.MinSize) / (OverlayWindow.MaxSize - OverlayWindow.MinSize));
             refreshing = false;
