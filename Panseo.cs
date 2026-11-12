@@ -1064,7 +1064,7 @@ namespace Panseo
             A("hide_ink", "필기 숨기기/보이기", N, Key.I, false),
             A("paste", "그림 붙여넣기", C, Key.V, false),
             A("capture_paste", "영역 붙이기 (화면 일부를 흰판에)", N, Key.None, false),
-            A("region_paper", "흰 종이 (부분 배경)", N, Key.None, false),
+            A("region_paper", "부분 배경", N, Key.None, false),
             A("region_mask", "가리기 켜기/끄기", N, Key.None, false),
             A("region_move", "그림·종이 옮기기", N, Key.None, false),
             A("eraser", "획 지우개", N, Key.E, false),
@@ -2635,21 +2635,32 @@ namespace Panseo
             }
             body.Children.Add(shapes);
 
-            // 붙이기 · 영역
-            body.Children.Add(Section("붙이기 · 영역"));
+            // 캡처 · 칠판: 윗줄은 화면 전체 배경, 아랫줄은 일부에만 까는 것 (부분 배경 · 가리기 · 붙여넣기 · 영역 붙이기)
+            body.Children.Add(Section("캡처 · 칠판"));
+            var bgs = new UniformGrid { Columns = 3 };
+            string[] bgNames = { "투명", "흰판", "칠판" };
+            string[] bgTips = { "화면 위에 판서", "흰색 화이트보드", "초록 칠판" };
+            for (int i = 0; i < 3; i++)
+            {
+                var mode = (BoardBg)i;
+                var b = Flat(new TextBlock { Text = bgNames[i], FontSize = 12 }, bgTips[i], 36, 28);
+                b.Click += (s, e) => ov.SetBg(mode);
+                Track(b, () => ov.Bg == mode);
+                AddTip(b, bgTips[i], "bg");
+                bgs.Children.Add(b);
+            }
+            body.Children.Add(bgs);
             var objs = new UniformGrid { Columns = 4 };
             const string pasteTip = "그림 붙여넣기\n캡처(Win+Shift+S)한 그림을 붙임\n끌어서 옮기기 · 오른쪽 아래 모서리로 크기";
             var pasteB = Flat(Glyph("", 15), pasteTip, 26, 30);
             pasteB.Click += (s, e) => ov.PasteClipboard();
             AddTip(pasteB, pasteTip, "paste");
-            objs.Children.Add(pasteB);
             const string capTip = "영역 붙이기\n화면 일부를 네모로 골라 흰판에 붙임";
             var capB = Flat(Glyph("", 15), capTip, 26, 30);
             capB.Click += (s, e) => ov.BeginCapturePaste();
             Track(capB, () => ov.CapturingRegion);
             AddTip(capB, capTip, "capture_paste");
-            objs.Children.Add(capB);
-            const string paperTip = "흰 종이 (부분 배경)\n끌어서 네모 종이 깔기 (칠판 배경이면 칠판색)\n종이·그림을 끌면 옮겨짐 · ✕ 또는 Delete로 지움";
+            const string paperTip = "부분 배경\n끌어서 네모 종이 깔기 (칠판 배경이면 칠판색)\n종이·그림을 끌면 옮겨짐 · ✕ 또는 Delete로 지움";
             var paperB = Flat(Glyph("", 15), paperTip, 26, 30);
             paperB.Click += (s, e) => ov.SetRegion(RegionMode.Paper);
             Track(paperB, () => ov.CurrentTool == Tool.Region && ov.Region == RegionMode.Paper && !ov.CapturingRegion);
@@ -2661,6 +2672,8 @@ namespace Panseo
             Track(maskB, () => ov.Masked || (ov.CurrentTool == Tool.Region && ov.Region == RegionMode.Mask));
             AddTip(maskB, maskTip, "region_mask");
             objs.Children.Add(maskB);
+            objs.Children.Add(pasteB);
+            objs.Children.Add(capB);
             body.Children.Add(objs);
 
             // 색상
@@ -2723,22 +2736,6 @@ namespace Panseo
             scaleBtn.Click += (s, e) => ov.CycleCursorScale();
             cursors.Children.Add(scaleBtn);
             body.Children.Add(cursors);
-
-            // 배경
-            body.Children.Add(Section("배경"));
-            var bgs = new UniformGrid { Columns = 3 };
-            string[] bgNames = { "투명", "흰판", "칠판" };
-            string[] bgTips = { "화면 위에 판서", "흰색 화이트보드", "초록 칠판" };
-            for (int i = 0; i < 3; i++)
-            {
-                var mode = (BoardBg)i;
-                var b = Flat(new TextBlock { Text = bgNames[i], FontSize = 12 }, bgTips[i], 36, 28);
-                b.Click += (s, e) => ov.SetBg(mode);
-                Track(b, () => ov.Bg == mode);
-                AddTip(b, bgTips[i], "bg");
-                bgs.Children.Add(b);
-            }
-            body.Children.Add(bgs);
 
             // 라이브 확대
             body.Children.Add(Section("라이브 확대"));
