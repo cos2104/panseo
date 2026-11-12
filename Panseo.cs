@@ -1160,7 +1160,11 @@ namespace Panseo
         Point panStart;
         double panOx, panOy;
 
-        readonly Layer normalLayer;
+        // 배경마다 따로 쓰는 장: 투명(화면 위) · 흰판 · 칠판. 배경을 바꾸면 그 배경의 필기·그림만 보임
+        readonly Layer[] pages = { new Layer(), new Layer(), new Layer() };
+        Layer normalLayer { get { return pages[(int)Bg]; } }   // 지금 보이는 장 (되돌리기·전체 삭제는 이 장만)
+        Layer screenLayer { get { return pages[0]; } }         // 화면 위 장 (라이브 확대·스크롤 따라가기는 이 장만)
+        InkCanvas objectsInk;
         EraserPreview eraserPreview;
         ScrollFollower follower;
         readonly List<Stroke> parked = new List<Stroke>(); // 스크롤로 영역 밖에 나가 숨겨 둔 판서
@@ -1216,9 +1220,8 @@ namespace Panseo
             // 흰판·칠판 배경은 판서 층과 따로 두어, 필기를 숨겨도 배경은 남도록
             board = new Border();
             grid.Children.Add(board);
-            normalLayer = new Layer();
             // 그림·흰 종이·가리기: 배경과 판서 사이 층 (입력은 받지 않음)
-            var objectsInk = new InkCanvas { IsHitTestVisible = false, Focusable = false, Background = Brushes.Transparent, EditingMode = InkCanvasEditingMode.None };
+            objectsInk = new InkCanvas { IsHitTestVisible = false, Focusable = false, Background = Brushes.Transparent, EditingMode = InkCanvasEditingMode.None };
             RenderOptions.SetBitmapScalingMode(objectsInk, BitmapScalingMode.HighQuality);
             objectsInk.Strokes = normalLayer.Objects;
             grid.Children.Add(objectsInk);
@@ -1235,6 +1238,9 @@ namespace Panseo
             shapeDrawer = new ShapeDrawer(grid, Ink, this);
             regionTool = new RegionTool(grid, Ink, normalLayer.Objects, this);
             regionTool.Captured = FinishCapture;
+            // 획 지우개(와콤 펜 뒤쪽 지우개 포함)로 필기가 없는 곳의 그림·종이를 누르면 그것을 지움
+            Ink.PreviewStylusDown += (s, e) => { if (CurrentTool == Tool.EraseStroke || e.StylusDevice.Inverted) EraseObjectAt(e.GetPosition(Ink)); };
+            Ink.PreviewMouseLeftButtonDown += (s, e) => { if (e.StylusDevice == null && CurrentTool == Tool.EraseStroke) EraseObjectAt(e.GetPosition(Ink)); };
 
             Ink.PreviewMouseLeftButtonDown += (s, e) =>
             {
@@ -1549,6 +1555,16 @@ namespace Panseo
             // 배경색은 판서 층 뒤의 board에, 판서 층은 항상 입력만 받는 거의 투명한 배경
             board.Background = Bg == BoardBg.Transparent ? null : BgBrush();
             Ink.Background = new SolidColorBrush(Color.FromArgb(1, 0, 0, 0));
+            // 배경이 바뀌면 그 배경의 장으로 갈아 끼움
+            var page = normalLayer;
+            if (Ink.Strokes != page.Strokes)
+            {
+                Ink.Strokes = page.Strokes;
+                objectsInk.Strokes = page.Objects;
+                if (regionTool != null) regionTool.SetObjects(page.Objects);
+                if (Bg == BoardBg.Transparent) screenLayer.Version++; // 스크롤 따라가기: 기준 화면 다시 잡기
+                Notify();
+            }
         }
 
         // ---------- 도형 ----------
@@ -1746,18 +1762,18 @@ namespace Panseo
         // 백그라운드 감지용 정보: 모니터 영역과 비교에서 뺄 영역(판서, 도구 모음, 알림). 감지하면 안 될 때는 null
         internal ScrollSnapshot TakeScrollSnapshot()
         {
-            if (Zooming || Selecting || !IsVisible) return null;
+            if (Zooming || Selecting || !IsVisible || Bg != BoardBg.Transparent) return null;
             if (CurrentTool != Tool.Mouse && (Native.GetAsyncKeyState(0x01) & 0x8000) != 0) return null; // 필기 중
             var b = DrawMon.Screen.Bounds;
-            var snap = new ScrollSnapshot { Bounds = b, Version = normalLayer.Version };
+            var snap = new ScrollSnapshot { Bounds = b, Version = screenLayer.Version };
             double sc = DpiScale;
-            foreach (var s in Ink.Strokes)
+            foreach (var s in screenLayer.Strokes)
             {
                 var r = s.GetBounds();
                 r.Inflate(6, 6);
                 snap.Masks.Add(new System.Drawing.Rectangle((int)(r.X * sc), (int)(r.Y * sc), (int)(r.Width * sc) + 2, (int)(r.Height * sc) + 2));
             }
-            foreach (var s in normalLayer.Objects)
+            foreach (var s in screenLayer.Objects)
             {
                 var o = s as BoardObject;
                 if (o == null) continue;
@@ -1785,7 +1801,7 @@ namespace Panseo
         {
             double sc = DpiScale;
             var m = new Matrix(1, 0, 0, 1, 0, dyPx / sc);
-            var list = new List<Stroke>(Ink.Strokes);
+            var list = new List<Stroke>(screenLayer.Strokes);
             list.AddRange(parked);
             foreach (var s in list)
             {
@@ -1797,11 +1813,11 @@ namespace Panseo
                 if (!isParked && (bot < yTop - Margin || top > yBot + Margin)) continue; // 고정된 곳(주소창 등)의 판서
                 s.Transform(m, false);
                 bool nowInside = bot + dyPx >= yTop && top + dyPx <= yBot;
-                if (!nowInside && !isParked) { normalLayer.RemoveSilently(s); parked.Add(s); }
-                else if (nowInside && isParked) { parked.Remove(s); normalLayer.AddSilently(s); }
+                if (!nowInside && !isParked) { screenLayer.RemoveSilently(s); parked.Add(s); }
+                else if (nowInside && isParked) { parked.Remove(s); screenLayer.AddSilently(s); }
             }
             // 그림·흰 종이도 그 영역 안에 있으면 함께 이동 (가리기는 제자리)
-            foreach (var s in normalLayer.Objects)
+            foreach (var s in screenLayer.Objects)
             {
                 var o = s as BoardObject;
                 if (o == null || o.Kind == ObjKind.Mask) continue;
@@ -1814,7 +1830,7 @@ namespace Panseo
 
         void UnparkAll()
         {
-            foreach (var s in parked) normalLayer.AddSilently(s);
+            foreach (var s in parked) screenLayer.AddSilently(s);
             parked.Clear();
         }
 
@@ -1886,7 +1902,7 @@ namespace Panseo
             cursorWasInside = true;
             // 기존 판서도 화면과 함께 확대해서 보여 줌
             var dm = DrawMon.Screen.Bounds;
-            TransformBetween(normalLayer, 1.0, dm.X, dm.Y, Zoom, originX, originY);
+            TransformBetween(screenLayer, 1.0, dm.X, dm.Y, Zoom, originX, originY);
             Zooming = true;
 
             var exclude = new List<IntPtr> { hwnd };
@@ -1909,7 +1925,7 @@ namespace Panseo
             mag.Hide();
             // 확대 중에 쓴 판서를 원래 크기·위치로 되돌려 남겨 둠
             var dm = DrawMon.Screen.Bounds;
-            TransformBetween(normalLayer, Zoom, originX, originY, 1.0, dm.X, dm.Y);
+            TransformBetween(screenLayer, Zoom, originX, originY, 1.0, dm.X, dm.Y);
             if (CurrentTool == Tool.Pan) CurrentTool = LastDrawTool;
             ApplyTool();
         }
@@ -1933,7 +1949,7 @@ namespace Panseo
             double sc = DpiScale;
             double k = Zoom / oz;
             var m = new Matrix(k, 0, 0, k, (ox0 - originX) * Zoom / sc, (oy0 - originY) * Zoom / sc);
-            if (!m.IsIdentity) TransformLayer(normalLayer, m);
+            if (!m.IsIdentity) TransformLayer(screenLayer, m);
             UpdateMag();
             Notify();
         }
@@ -2098,7 +2114,7 @@ namespace Panseo
         // 전체 삭제 (되돌리기 가능)
         public void ClearAll()
         {
-            UnparkAll(); // 숨겨 둔 판서도 함께 지우고, 되돌리면 함께 돌아오도록
+            if (Bg == BoardBg.Transparent) UnparkAll(); // 숨겨 둔 판서도 함께 지우고, 되돌리면 함께 돌아오도록
             normalLayer.ClearAll();
             Notify();
         }
@@ -2168,6 +2184,21 @@ namespace Panseo
             normalLayer.ChangeObjects(p, null);
             Notify();
             return p;
+        }
+
+        // 획 지우개로 누른 곳: 필기가 있으면 필기만 지우고(지우개가 알아서), 없으면 맨 위 그림·종이를 지움
+        void EraseObjectAt(Point p)
+        {
+            if (Ink.Strokes.HitTest(new[] { p }, Ink.EraserShape).Count > 0) return;
+            var mk = MaskObj;
+            if (mk != null && !mk.Rect.Contains(p)) return; // 가려진 곳의 그림은 건드리지 않음
+            var objs = normalLayer.Objects;
+            for (int i = objs.Count - 1; i >= 0; i--)
+            {
+                var o = objs[i] as BoardObject;
+                if (o == null || o.Kind == ObjKind.Mask) continue;
+                if (o.Rect.Contains(p)) { RemoveObject(o); return; }
+            }
         }
 
         internal void RemoveObject(BoardObject o)
@@ -2609,7 +2640,7 @@ namespace Panseo
             tools.Children.Add(ToolBtn("", "펜", "펜 (필압 지원)", Tool.Pen, "pen"));
             tools.Children.Add(ToolBtn("", "형광펜", "형광펜", Tool.Highlighter, "highlighter"));
             tools.Children.Add(ToolBtn("\uE8D2", "텍스트", "텍스트: 누른 곳에 글자 입력\nEsc·Ctrl+Enter·다른 곳 누르기로 완료\n색·굵기로 글자 색·크기 조절", Tool.Text, "text"));
-            tools.Children.Add(ToolBtn("", "획 지우개", "획 단위로 지우기\n와콤 펜 뒤쪽 지우개도 사용 가능", Tool.EraseStroke, "eraser"));
+            tools.Children.Add(ToolBtn("", "획 지우개", "획 단위로 지우기 · 붙인 그림·종이도 누르면 지워짐\n와콤 펜 뒤쪽 지우개도 사용 가능", Tool.EraseStroke, "eraser"));
             tools.Children.Add(ToolBtn("", "부분 지우개", "문지른 부분만 지우기", Tool.ErasePoint, "eraser_point"));
             tools.Children.Add(ActionBtn("", "전체 삭제", "전체 삭제", () => ov.ClearAll(), "clear"));
             const string hideTip = "필기 숨기기/보이기 (지우지 않고 잠시 감춤)\n숨긴 상태에서 펜으로 쓰면 다시 보입니다";
@@ -2639,7 +2670,7 @@ namespace Panseo
             body.Children.Add(Section("캡처 · 칠판"));
             var bgs = new UniformGrid { Columns = 3 };
             string[] bgNames = { "투명", "흰판", "칠판" };
-            string[] bgTips = { "화면 위에 판서", "흰색 화이트보드", "초록 칠판" };
+            string[] bgTips = { "화면 위에 판서", "흰색 화이트보드 · 쓴 것은 흰판에 남아 다시 오면 보임", "초록 칠판 · 쓴 것은 칠판에 남아 다시 오면 보임" };
             for (int i = 0; i < 3; i++)
             {
                 var mode = (BoardBg)i;
@@ -3786,7 +3817,7 @@ namespace Panseo
 
         readonly OverlayWindow main;
         readonly InkCanvas ink;
-        readonly StrokeCollection objects;
+        StrokeCollection objects;
         readonly Canvas canvas = new Canvas { IsHitTestVisible = false };
         readonly Rectangle preview = Dashed();
         readonly Rectangle outline = Dashed();
@@ -3827,6 +3858,15 @@ namespace Panseo
         }
 
         bool Active { get { return main.CurrentTool == Tool.Region; } }
+
+        // 배경(장)이 바뀌면 그 장의 그림·종이로
+        public void SetObjects(StrokeCollection c)
+        {
+            objects = c;
+            Selected = null;
+            if (drag != Drag.None) { drag = Drag.None; ink.ReleaseMouseCapture(); preview.Visibility = Visibility.Collapsed; }
+            Refresh();
+        }
 
         // 누른 곳에 있는 것과 할 일
         BoardObject Find(Point p, out Drag kind)
