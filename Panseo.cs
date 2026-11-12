@@ -24,7 +24,7 @@ using WinForms = System.Windows.Forms;
 
 namespace Panseo
 {
-    public enum Tool { Mouse, Pen, Highlighter, EraseStroke, ErasePoint, Pan, Text, Shape }
+    public enum Tool { Mouse, Pen, Highlighter, EraseStroke, ErasePoint, Pan, Text, Shape, Region }
     public enum ShapeKind { Line, Arrow, Rect, Ellipse }
     public enum CursorStyle { Pencil, Dot, Cross }
     public enum BoardBg { Transparent, White, Chalk }
@@ -33,11 +33,14 @@ namespace Panseo
     {
         public StrokeCollection Added;
         public StrokeCollection Removed;
+        public StrokeCollection ObjAdded = new StrokeCollection();   // 그림·종이·가리기 층
+        public StrokeCollection ObjRemoved = new StrokeCollection();
     }
 
     class Layer
     {
         public readonly StrokeCollection Strokes = new StrokeCollection();
+        public readonly StrokeCollection Objects = new StrokeCollection(); // 판서 아래 층: 그림·흰 종이·가리기 (지우개에 안 지워짐)
         public readonly List<Change> Undo = new List<Change>();
         public readonly List<Change> Redo = new List<Change>();
         public int Version; // 사용자가 판서를 바꿀 때마다 증가 (스크롤 따라가기의 기준 화면 갱신용)
@@ -93,6 +96,8 @@ namespace Panseo
             foreach (var s in c.Added) if (Strokes.Contains(s)) Strokes.Remove(s);
             Strokes.Add(c.Removed);
             suppress = false;
+            foreach (var s in c.ObjAdded) Objects.Remove(s);
+            foreach (var s in c.ObjRemoved) InsertObject(s);
             Redo.Add(c);
         }
 
@@ -105,7 +110,48 @@ namespace Panseo
             foreach (var s in c.Removed) if (Strokes.Contains(s)) Strokes.Remove(s);
             Strokes.Add(c.Added);
             suppress = false;
+            foreach (var s in c.ObjRemoved) Objects.Remove(s);
+            foreach (var s in c.ObjAdded) InsertObject(s);
             Undo.Add(c);
+        }
+
+        // 가리기는 늘 맨 위(다른 그림·종이도 가리도록), 나머지는 그 아래
+        void InsertObject(Stroke s)
+        {
+            if (Objects.Contains(s)) return;
+            var b = s as BoardObject;
+            if (b == null || b.Kind != ObjKind.Mask)
+                for (int i = 0; i < Objects.Count; i++)
+                {
+                    var o = Objects[i] as BoardObject;
+                    if (o != null && o.Kind == ObjKind.Mask) { Objects.Insert(i, s); return; }
+                }
+            Objects.Add(s);
+        }
+
+        // 그림·종이·가리기 하나 넣기/빼기 (되돌리기 기록)
+        public void ChangeObjects(Stroke add, Stroke remove)
+        {
+            var c = new Change { Added = new StrokeCollection(), Removed = new StrokeCollection() };
+            if (remove != null && Objects.Contains(remove)) { Objects.Remove(remove); c.ObjRemoved.Add(remove); }
+            if (add != null) { InsertObject(add); c.ObjAdded.Add(add); }
+            Version++;
+            Undo.Add(c);
+            Redo.Clear();
+        }
+
+        // 전체 삭제: 판서와 그림·종이·가리기를 한 번에 (되돌리기도 한 번에)
+        public void ClearAll()
+        {
+            if (Strokes.Count == 0 && Objects.Count == 0) return;
+            var c = new Change { Added = new StrokeCollection(), Removed = new StrokeCollection(Strokes), ObjRemoved = new StrokeCollection(Objects) };
+            suppress = true;
+            Strokes.Clear();
+            suppress = false;
+            Objects.Clear();
+            Version++;
+            Undo.Add(c);
+            Redo.Clear();
         }
     }
 
@@ -1016,6 +1062,11 @@ namespace Panseo
             A("shape_rect", "도형: 네모", N, Key.None, false),
             A("shape_ellipse", "도형: 동그라미", N, Key.None, false),
             A("hide_ink", "필기 숨기기/보이기", N, Key.I, false),
+            A("paste", "그림 붙여넣기", C, Key.V, false),
+            A("capture_paste", "영역 붙이기 (화면 일부를 흰판에)", N, Key.None, false),
+            A("region_paper", "흰 종이 (부분 배경)", N, Key.None, false),
+            A("region_mask", "가리기 켜기/끄기", N, Key.None, false),
+            A("region_move", "그림·종이 옮기기", N, Key.None, false),
             A("eraser", "획 지우개", N, Key.E, false),
             A("eraser_point", "부분 지우개", N, Key.R, false),
             A("mouse", "마우스 모드", N, Key.M, false),
@@ -1086,7 +1137,7 @@ namespace Panseo
         public Color PenColor = Color.FromRgb(0xE5, 0x39, 0x35);
         public Color HlColor = Color.FromRgb(0xFD, 0xD8, 0x35);
         public double PenSize = 4;
-        public const string Version = "v31";
+        public const string Version = "v32";
         public BoardBg Bg = BoardBg.Transparent;
         public event Action ToolStateChanged;
         public static readonly double[] PenSizes = { 2, 4, 8 };
@@ -1165,9 +1216,14 @@ namespace Panseo
             // 흰판·칠판 배경은 판서 층과 따로 두어, 필기를 숨겨도 배경은 남도록
             board = new Border();
             grid.Children.Add(board);
+            normalLayer = new Layer();
+            // 그림·흰 종이·가리기: 배경과 판서 사이 층 (입력은 받지 않음)
+            var objectsInk = new InkCanvas { IsHitTestVisible = false, Focusable = false, Background = Brushes.Transparent, EditingMode = InkCanvasEditingMode.None };
+            RenderOptions.SetBitmapScalingMode(objectsInk, BitmapScalingMode.HighQuality);
+            objectsInk.Strokes = normalLayer.Objects;
+            grid.Children.Add(objectsInk);
             Ink = new InkCanvas();
             ConfigureInk(Ink);
-            normalLayer = new Layer();
             Ink.Strokes = normalLayer.Strokes;
             grid.Children.Add(Ink);
             // 필기를 숨긴 상태에서 쓰기 시작하면 자동으로 다시 보이게
@@ -1177,6 +1233,8 @@ namespace Panseo
             eraserPreview = new EraserPreview(grid, Ink);
             textEditor = new TextEditor(grid, Ink, this);
             shapeDrawer = new ShapeDrawer(grid, Ink, this);
+            regionTool = new RegionTool(grid, Ink, normalLayer.Objects, this);
+            regionTool.Captured = FinishCapture;
 
             Ink.PreviewMouseLeftButtonDown += (s, e) =>
             {
@@ -1401,6 +1459,7 @@ namespace Panseo
         public void SetTool(Tool t)
         {
             if (t == Tool.Mouse) CancelSelect();
+            if (t != Tool.Region && CapturingRegion) CancelCapture();
             if (t == Tool.Pan && !Zooming && !StartZoom()) return;
             CurrentTool = t;
             if (t == Tool.Pen || t == Tool.Highlighter) LastDrawTool = t;
@@ -1624,6 +1683,7 @@ namespace Panseo
                     ink.Cursor = Cursors.IBeam;
                     break;
                 case Tool.Shape:
+                case Tool.Region:
                     ink.EditingMode = InkCanvasEditingMode.None;
                     ink.Cursor = Cursors.Cross;
                     break;
@@ -1697,6 +1757,14 @@ namespace Panseo
                 r.Inflate(6, 6);
                 snap.Masks.Add(new System.Drawing.Rectangle((int)(r.X * sc), (int)(r.Y * sc), (int)(r.Width * sc) + 2, (int)(r.Height * sc) + 2));
             }
+            foreach (var s in normalLayer.Objects)
+            {
+                var o = s as BoardObject;
+                if (o == null) continue;
+                if (o.Kind == ObjKind.Mask) { snap.Masks.Add(new System.Drawing.Rectangle(0, 0, b.Width, b.Height)); continue; }
+                var r = o.Rect;
+                snap.Masks.Add(new System.Drawing.Rectangle((int)(r.X * sc) - 4, (int)(r.Y * sc) - 4, (int)(r.Width * sc) + 8, (int)(r.Height * sc) + 8));
+            }
             if (Toolbar != null && Toolbar.IsVisible)
             {
                 Native.RECT tr;
@@ -1731,6 +1799,16 @@ namespace Panseo
                 bool nowInside = bot + dyPx >= yTop && top + dyPx <= yBot;
                 if (!nowInside && !isParked) { normalLayer.RemoveSilently(s); parked.Add(s); }
                 else if (nowInside && isParked) { parked.Remove(s); normalLayer.AddSilently(s); }
+            }
+            // 그림·흰 종이도 그 영역 안에 있으면 함께 이동 (가리기는 제자리)
+            foreach (var s in normalLayer.Objects)
+            {
+                var o = s as BoardObject;
+                if (o == null || o.Kind == ObjKind.Mask) continue;
+                var r = o.Rect;
+                double cx = (r.Left + r.Right) / 2 * sc;
+                if (cx < xMin || cx > xMax || r.Bottom * sc < yTop - 40 || r.Top * sc > yBot + 40) continue;
+                o.Transform(m, false);
             }
         }
 
@@ -1872,12 +1950,15 @@ namespace Panseo
         void TransformLayer(Layer l, Matrix m)
         {
             var set = new HashSet<Stroke>(l.Strokes);
+            foreach (var s in l.Objects) set.Add(s);
             foreach (var s in parked) set.Add(s); // 스크롤로 숨겨 둔 판서도 함께 변환
             foreach (var list in new[] { l.Undo, l.Redo })
                 foreach (var c in list)
                 {
                     foreach (var s in c.Added) set.Add(s);
                     foreach (var s in c.Removed) set.Add(s);
+                    foreach (var s in c.ObjAdded) set.Add(s);
+                    foreach (var s in c.ObjRemoved) set.Add(s);
                 }
             foreach (var s in set) s.Transform(m, true);
         }
@@ -2004,19 +2085,213 @@ namespace Panseo
         {
             if (InkHidden) SetInkHidden(false); // 숨긴 채로 바뀌면 알 수 없으므로 보이게
             normalLayer.DoUndo();
+            Notify();
         }
 
         public void Redo()
         {
             if (InkHidden) SetInkHidden(false);
             normalLayer.DoRedo();
+            Notify();
         }
 
         // 전체 삭제 (되돌리기 가능)
         public void ClearAll()
         {
             UnparkAll(); // 숨겨 둔 판서도 함께 지우고, 되돌리면 함께 돌아오도록
-            if (Ink.Strokes.Count > 0) Ink.Strokes.Clear();
+            normalLayer.ClearAll();
+            Notify();
+        }
+
+        // ---------- 그림 붙이기 · 흰 종이 · 가리기 ----------
+        public RegionMode Region = RegionMode.Move;
+        RegionTool regionTool;
+        BoardBg captureBg;
+        static readonly Brush MaskBrush = Frozen(Color.FromRgb(0x2B, 0x2D, 0x31));
+        static readonly Brush ChalkBrush = Frozen(Color.FromRgb(0x1F, 0x3B, 0x2D));
+
+        static Brush Frozen(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        BoardObject MaskObj
+        {
+            get
+            {
+                foreach (var s in normalLayer.Objects)
+                {
+                    var o = s as BoardObject;
+                    if (o != null && o.Kind == ObjKind.Mask) return o;
+                }
+                return null;
+            }
+        }
+
+        public bool Masked { get { return MaskObj != null; } }
+        public bool CapturingRegion { get { return regionTool != null && regionTool.Capturing; } }
+
+        public void SetRegion(RegionMode m)
+        {
+            Region = m;
+            SetTool(Tool.Region);
+        }
+
+        public void ToggleMask()
+        {
+            var mk = MaskObj;
+            if (mk != null)
+            {
+                RemoveObject(mk);
+                if (CurrentTool == Tool.Region && Region == RegionMode.Mask) SetTool(LastDrawTool);
+                ShowToast("가리기 끔");
+                return;
+            }
+            SetRegion(RegionMode.Mask);
+            ShowToast("보일 곳을 네모로 끌어 고르세요 · 구멍을 끌면 옮겨집니다");
+        }
+
+        // 끌어서 고른 네모로 흰 종이 또는 가리기 만들기 (가리기는 하나만: 새로 고르면 바뀜)
+        internal BoardObject AddRegion(Rect r)
+        {
+            if (Region == RegionMode.Mask)
+            {
+                var m = new BoardObject(ObjKind.Mask, r, null, MaskBrush);
+                normalLayer.ChangeObjects(m, MaskObj);
+                Notify();
+                return m;
+            }
+            if (Region != RegionMode.Paper) return null;
+            var p = new BoardObject(ObjKind.Paper, r, null, Bg == BoardBg.Chalk ? ChalkBrush : Brushes.White);
+            normalLayer.ChangeObjects(p, null);
+            Notify();
+            return p;
+        }
+
+        internal void RemoveObject(BoardObject o)
+        {
+            normalLayer.ChangeObjects(null, o);
+            Notify();
+        }
+
+        // 클립보드 그림 (캡처 도구의 PNG → 그림 파일 복사 → 일반 그림 순)
+        static BitmapSource ClipboardImage()
+        {
+            try
+            {
+                var data = Clipboard.GetDataObject();
+                if (data == null) return null;
+                if (data.GetDataPresent("PNG"))
+                {
+                    var ms = data.GetData("PNG") as MemoryStream;
+                    if (ms != null)
+                    {
+                        var f = new PngBitmapDecoder(ms, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+                        f.Freeze();
+                        return f;
+                    }
+                }
+                if (Clipboard.ContainsFileDropList())
+                    foreach (string file in Clipboard.GetFileDropList())
+                    {
+                        string ext = System.IO.Path.GetExtension(file).ToLowerInvariant();
+                        if (ext != ".png" && ext != ".jpg" && ext != ".jpeg" && ext != ".bmp" && ext != ".gif") continue;
+                        var bi = new BitmapImage();
+                        bi.BeginInit();
+                        bi.CacheOption = BitmapCacheOption.OnLoad;
+                        bi.UriSource = new Uri(file);
+                        bi.EndInit();
+                        bi.Freeze();
+                        return bi;
+                    }
+                if (Clipboard.ContainsImage())
+                {
+                    var img = Clipboard.GetImage();
+                    if (img != null)
+                    {
+                        // 일반 그림은 투명도 값이 0으로 오는 경우가 있어 불투명으로 바꿈
+                        var c = new FormatConvertedBitmap(img, PixelFormats.Bgr32, null, 0);
+                        c.Freeze();
+                        return c;
+                    }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        public void PasteClipboard()
+        {
+            var img = ClipboardImage();
+            if (img == null) { ShowToast("붙여 넣을 그림이 없습니다 · 캡처(Win+Shift+S)한 뒤 붙여 넣으세요"); return; }
+            var mp = Mouse.GetPosition(this);
+            bool inside = mp.X >= 0 && mp.Y >= 0 && mp.X <= ActualWidth && mp.Y <= ActualHeight;
+            PlaceImage(img, inside ? mp : new Point(ActualWidth / 2, ActualHeight / 2));
+        }
+
+        // 화면 픽셀 그대로의 크기(너무 크면 화면의 90%)로 center에 놓고 옮기기 도구로
+        void PlaceImage(BitmapSource img, Point center)
+        {
+            double sc = DpiScale;
+            double w = img.PixelWidth / sc, h = img.PixelHeight / sc;
+            double k = Math.Min(1, Math.Min(ActualWidth * 0.9 / w, ActualHeight * 0.9 / h));
+            w *= k;
+            h *= k;
+            double x = Math.Max(0, Math.Min(ActualWidth - w, center.X - w / 2));
+            double y = Math.Max(0, Math.Min(ActualHeight - h, center.Y - h / 2));
+            var o = new BoardObject(ObjKind.Image, new Rect(x, y, w, h), img, null);
+            normalLayer.ChangeObjects(o, null);
+            regionTool.Selected = o;
+            Region = RegionMode.Move;
+            SetTool(Tool.Region);
+            ShowToast("끌어서 옮기기 · 오른쪽 아래 모서리로 크기 · 펜을 고르면 필기");
+        }
+
+        // 영역 붙이기: 화면 일부를 네모로 골라 찍은 뒤 흰판(칠판이면 칠판)에 붙임
+        public void BeginCapturePaste()
+        {
+            if (CapturingRegion) { CancelCapture(); SetTool(LastDrawTool); return; }
+            if (Zooming) StopZoom();
+            captureBg = Bg;
+            if (Bg != BoardBg.Transparent) { Bg = BoardBg.Transparent; ApplyBg(); } // 뒤의 화면이 보이게
+            regionTool.Capturing = true;
+            regionTool.Selected = null;
+            SetTool(Tool.Region);
+            ShowToast("붙일 곳을 네모로 끌어 고르세요 · Esc: 취소");
+        }
+
+        void CancelCapture()
+        {
+            regionTool.Capturing = false;
+            if (Bg != captureBg) { Bg = captureBg; ApplyBg(); }
+            Notify();
+        }
+
+        async void FinishCapture(Rect r)
+        {
+            await Task.Delay(120); // 고르기 네모가 화면에서 사라진 뒤 찍기
+            BitmapSource img = null;
+            try
+            {
+                double sc = DpiScale;
+                var b = DrawMon.Screen.Bounds;
+                int w = Math.Max(1, (int)Math.Round(r.Width * sc)), h = Math.Max(1, (int)Math.Round(r.Height * sc));
+                using (var bmp = new System.Drawing.Bitmap(w, h))
+                {
+                    using (var g = System.Drawing.Graphics.FromImage(bmp))
+                        g.CopyFromScreen(b.X + (int)Math.Round(r.X * sc), b.Y + (int)Math.Round(r.Y * sc), 0, 0, new System.Drawing.Size(w, h));
+                    var ms = new MemoryStream();
+                    bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+                    ms.Position = 0;
+                    img = new PngBitmapDecoder(ms, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad).Frames[0];
+                    img.Freeze();
+                }
+            }
+            catch (Exception ex) { ShowToast("찍기 실패: " + ex.Message); }
+            SetBg(captureBg == BoardBg.Transparent ? BoardBg.White : captureBg);
+            if (img != null) PlaceImage(img, new Point(ActualWidth / 2, ActualHeight / 2));
         }
 
         // ---------- 화면 캡처 ----------
@@ -2073,6 +2348,11 @@ namespace Panseo
             actions["shape_rect"] = () => SetShape(ShapeKind.Rect);
             actions["shape_ellipse"] = () => SetShape(ShapeKind.Ellipse);
             actions["hide_ink"] = ToggleHideInk;
+            actions["paste"] = PasteClipboard;
+            actions["capture_paste"] = BeginCapturePaste;
+            actions["region_paper"] = () => SetRegion(RegionMode.Paper);
+            actions["region_mask"] = ToggleMask;
+            actions["region_move"] = () => SetRegion(RegionMode.Move);
             actions["size1"] = () => SetPenSize(PenSizes[0]);
             actions["size2"] = () => SetPenSize(PenSizes[1]);
             actions["size3"] = () => SetPenSize(PenSizes[2]);
@@ -2149,6 +2429,7 @@ namespace Panseo
                 { "selecting", Selecting },
                 { "zoom", Math.Round(Zoom, 1) },
                 { "hidden", InkHidden },
+                { "masked", Masked },
                 { "scrollFollow", ScrollFollow },
                 { "exe", System.Diagnostics.Process.GetCurrentProcess().MainModule.FileName }
             };
@@ -2190,6 +2471,15 @@ namespace Panseo
             if (Keyboard.FocusedElement is TextBox) return; // 글자 입력 중에는 단축키 대신 입력
             Key k = e.Key == Key.System ? e.SystemKey : (e.Key == Key.ImeProcessed ? e.ImeProcessedKey : e.Key);
             var mods = Keyboard.Modifiers;
+            // 옮기기 도구에서 고른 그림·종이·가리기 지우기
+            if (CurrentTool == Tool.Region && mods == ModifierKeys.None && (k == Key.Delete || k == Key.Back)
+                && regionTool.Selected != null && normalLayer.Objects.Contains(regionTool.Selected))
+            {
+                RemoveObject(regionTool.Selected);
+                regionTool.Selected = null;
+                e.Handled = true;
+                return;
+            }
             foreach (var a in HotkeyStore.Actions)
             {
                 KeyCombo c;
@@ -2344,6 +2634,34 @@ namespace Panseo
                 shapes.Children.Add(b);
             }
             body.Children.Add(shapes);
+
+            // 붙이기 · 영역
+            body.Children.Add(Section("붙이기 · 영역"));
+            var objs = new UniformGrid { Columns = 4 };
+            const string pasteTip = "그림 붙여넣기\n캡처(Win+Shift+S)한 그림을 붙임\n끌어서 옮기기 · 오른쪽 아래 모서리로 크기";
+            var pasteB = Flat(Glyph("", 15), pasteTip, 26, 30);
+            pasteB.Click += (s, e) => ov.PasteClipboard();
+            AddTip(pasteB, pasteTip, "paste");
+            objs.Children.Add(pasteB);
+            const string capTip = "영역 붙이기\n화면 일부를 네모로 골라 흰판에 붙임";
+            var capB = Flat(Glyph("", 15), capTip, 26, 30);
+            capB.Click += (s, e) => ov.BeginCapturePaste();
+            Track(capB, () => ov.CapturingRegion);
+            AddTip(capB, capTip, "capture_paste");
+            objs.Children.Add(capB);
+            const string paperTip = "흰 종이 (부분 배경)\n끌어서 네모 종이 깔기 (칠판 배경이면 칠판색)\n종이·그림을 끌면 옮겨짐 · ✕ 또는 Delete로 지움";
+            var paperB = Flat(Glyph("", 15), paperTip, 26, 30);
+            paperB.Click += (s, e) => ov.SetRegion(RegionMode.Paper);
+            Track(paperB, () => ov.CurrentTool == Tool.Region && ov.Region == RegionMode.Paper && !ov.CapturingRegion);
+            AddTip(paperB, paperTip, "region_paper");
+            objs.Children.Add(paperB);
+            const string maskTip = "가리기\n보일 곳만 네모로 남기고 나머지를 가림\n구멍을 끌면 옮겨짐 · 다시 누르면 끔";
+            var maskB = Flat(new TextBlock { Text = "▣", FontSize = 16, FontFamily = new FontFamily("Segoe UI Symbol") }, maskTip, 26, 30);
+            maskB.Click += (s, e) => ov.ToggleMask();
+            Track(maskB, () => ov.Masked || (ov.CurrentTool == Tool.Region && ov.Region == RegionMode.Mask));
+            AddTip(maskB, maskTip, "region_mask");
+            objs.Children.Add(maskB);
+            body.Children.Add(objs);
 
             // 색상
             body.Children.Add(Section("색상"));
@@ -3388,6 +3706,260 @@ namespace Panseo
                     break;
             }
             return pts;
+        }
+    }
+
+    // ================= 그림 · 흰 종이 · 가리기 =================
+    // 판서 아래 층(Layer.Objects)에 놓는 것들. 지우개에는 지워지지 않고, 되돌리기·확대·스크롤 따라가기는 판서와 함께 적용
+    public enum ObjKind { Image, Paper, Mask }
+    public enum RegionMode { Move, Paper, Mask }
+
+    public class BoardObject : Stroke
+    {
+        public readonly ObjKind Kind;
+        readonly BitmapSource image;
+        readonly Brush fill;
+        readonly Rect baseRect;
+        Matrix layout = Matrix.Identity;
+
+        public BoardObject(ObjKind kind, Rect r, BitmapSource img, Brush fill)
+            : base(new StylusPointCollection { new StylusPoint(r.Left, r.Top), new StylusPoint(r.Right, r.Bottom) },
+                   new DrawingAttributes { Color = Color.FromArgb(0, 0, 0, 0), Width = 1, Height = 1, IgnorePressure = true, FitToCurve = false })
+        {
+            Kind = kind;
+            baseRect = r;
+            image = img;
+            this.fill = fill;
+        }
+
+        // 지금 화면에서의 자리 (가리기는 보이는 구멍)
+        public Rect Rect
+        {
+            get
+            {
+                var r = baseRect;
+                r.Transform(layout);
+                return r;
+            }
+        }
+
+        protected override void DrawCore(DrawingContext dc, DrawingAttributes da)
+        {
+            var r = Rect;
+            if (Kind == ObjKind.Image) dc.DrawImage(image, r);
+            else if (Kind == ObjKind.Paper) dc.DrawRectangle(fill, null, r);
+            else
+            {
+                var outer = r;
+                outer.Inflate(30000, 30000);
+                dc.DrawGeometry(fill, null, new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(outer), new RectangleGeometry(r)));
+            }
+        }
+
+        public override void Transform(Matrix m, bool applyToStylusTip)
+        {
+            base.Transform(m, applyToStylusTip);
+            layout.Append(m);
+        }
+
+        // 화면 위 자리를 target으로 옮기기·늘리기
+        public void MoveTo(Rect target)
+        {
+            var r = Rect;
+            if (r.Width <= 0 || r.Height <= 0) return;
+            double sx = target.Width / r.Width, sy = target.Height / r.Height;
+            Transform(new Matrix(sx, 0, 0, sy, target.X - sx * r.X, target.Y - sy * r.Y), false);
+        }
+
+        public override Stroke Clone()
+        {
+            var c = new BoardObject(Kind, baseRect, image, fill);
+            c.StylusPoints = StylusPoints.Clone();
+            c.layout = layout;
+            return c;
+        }
+    }
+
+    // 옮기기·흰 종이·가리기 도구: 빈 곳을 끌면 새 네모(종이·가리기), 그림·종이·구멍을 끌면 옮기기,
+    // 오른쪽 아래 손잡이로 크기, 오른쪽 위 ✕로 지우기. 영역 붙이기 중에는 고른 네모를 찍음
+    public class RegionTool
+    {
+        enum Drag { None, New, Move, Resize, Delete }
+        const double HitR = 18;
+
+        readonly OverlayWindow main;
+        readonly InkCanvas ink;
+        readonly StrokeCollection objects;
+        readonly Canvas canvas = new Canvas { IsHitTestVisible = false };
+        readonly Rectangle preview = Dashed();
+        readonly Rectangle outline = Dashed();
+        readonly Rectangle sizeHandle = new Rectangle { Width = 14, Height = 14, Fill = Brushes.White, Stroke = ToolbarWindow.Accent, StrokeThickness = 2, Visibility = Visibility.Collapsed };
+        readonly Border deleteHandle = new Border
+        {
+            Width = 22, Height = 22, CornerRadius = new CornerRadius(11), Visibility = Visibility.Collapsed,
+            Background = new SolidColorBrush(Color.FromRgb(0xE5, 0x39, 0x35)),
+            Child = new TextBlock { Text = "✕", Foreground = Brushes.White, FontSize = 11, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center }
+        };
+        Drag drag;
+        Point start;
+        Rect startRect;
+        public BoardObject Selected;
+        public bool Capturing;
+        public Action<Rect> Captured;
+
+        static Rectangle Dashed()
+        {
+            return new Rectangle { Stroke = ToolbarWindow.Accent, StrokeThickness = 2, StrokeDashArray = new DoubleCollection { 4, 3 }, Visibility = Visibility.Collapsed };
+        }
+
+        public RegionTool(Panel host, InkCanvas ink, StrokeCollection objects, OverlayWindow main)
+        {
+            this.main = main;
+            this.ink = ink;
+            this.objects = objects;
+            canvas.Children.Add(preview);
+            canvas.Children.Add(outline);
+            canvas.Children.Add(sizeHandle);
+            canvas.Children.Add(deleteHandle);
+            host.Children.Add(canvas);
+            ink.PreviewMouseLeftButtonDown += OnDown;
+            ink.PreviewMouseMove += OnMove;
+            ink.PreviewMouseLeftButtonUp += OnUp;
+            ink.LostMouseCapture += (s, e) => { if (drag != Drag.None) { drag = Drag.None; preview.Visibility = Visibility.Collapsed; } };
+            main.ToolStateChanged += Refresh;
+        }
+
+        bool Active { get { return main.CurrentTool == Tool.Region; } }
+
+        // 누른 곳에 있는 것과 할 일
+        BoardObject Find(Point p, out Drag kind)
+        {
+            kind = Drag.None;
+            if (Selected != null && objects.Contains(Selected))
+            {
+                var r = Selected.Rect;
+                if ((p - r.TopRight).Length <= HitR) { kind = Drag.Delete; return Selected; }
+                if ((p - r.BottomRight).Length <= HitR) { kind = Drag.Resize; return Selected; }
+            }
+            BoardObject mask = null;
+            for (int i = objects.Count - 1; i >= 0; i--)
+            {
+                var o = objects[i] as BoardObject;
+                if (o == null) continue;
+                if (o.Kind == ObjKind.Mask) { mask = o; continue; }
+                if (o.Rect.Contains(p)) { kind = Drag.Move; return o; }
+            }
+            if (mask != null && main.Region != RegionMode.Paper && mask.Rect.Contains(p)) { kind = Drag.Move; return mask; }
+            return null;
+        }
+
+        void OnDown(object sender, MouseButtonEventArgs e)
+        {
+            if (!Active) return;
+            var p = e.GetPosition(ink);
+            e.Handled = true;
+            if (!Capturing)
+            {
+                Drag k;
+                var o = Find(p, out k);
+                if (k == Drag.Delete) { main.RemoveObject(o); Selected = null; Refresh(); return; }
+                if (o != null)
+                {
+                    Selected = o;
+                    drag = k;
+                    start = p;
+                    startRect = o.Rect;
+                    ink.CaptureMouse();
+                    Refresh();
+                    return;
+                }
+                Selected = null;
+                Refresh();
+                if (main.Region == RegionMode.Move) return;
+            }
+            drag = Drag.New;
+            start = p;
+            ink.CaptureMouse();
+            ShowPreview(p);
+        }
+
+        void OnMove(object sender, MouseEventArgs e)
+        {
+            if (!Active) return;
+            var p = e.GetPosition(ink);
+            if (drag == Drag.None)
+            {
+                Drag k = Drag.None;
+                if (!Capturing) Find(p, out k);
+                ink.Cursor = k == Drag.Delete ? Cursors.Hand : k == Drag.Resize ? Cursors.SizeNWSE : k == Drag.Move ? Cursors.SizeAll : Cursors.Cross;
+                return;
+            }
+            if (drag == Drag.New) { ShowPreview(p); return; }
+            Rect r;
+            if (drag == Drag.Move)
+                r = new Rect(startRect.X + p.X - start.X, startRect.Y + p.Y - start.Y, startRect.Width, startRect.Height);
+            else
+            {
+                double w = Math.Max(20, startRect.Width + p.X - start.X), h = Math.Max(20, startRect.Height + p.Y - start.Y);
+                if (Selected.Kind == ObjKind.Image)
+                {
+                    double k = Math.Max(w / startRect.Width, h / startRect.Height); // 그림은 가로세로 비율 그대로
+                    w = startRect.Width * k;
+                    h = startRect.Height * k;
+                }
+                r = new Rect(startRect.X, startRect.Y, w, h);
+            }
+            Selected.MoveTo(r);
+            Refresh();
+        }
+
+        void OnUp(object sender, MouseButtonEventArgs e)
+        {
+            if (drag == Drag.None) return;
+            var d = drag;
+            drag = Drag.None;
+            ink.ReleaseMouseCapture();
+            preview.Visibility = Visibility.Collapsed;
+            e.Handled = true;
+            if (d != Drag.New) return;
+            var r = new Rect(start, e.GetPosition(ink));
+            if (r.Width < 8 || r.Height < 8) return;
+            if (Capturing)
+            {
+                Capturing = false;
+                if (Captured != null) Captured(r);
+                return;
+            }
+            Selected = main.AddRegion(r);
+            Refresh();
+        }
+
+        void ShowPreview(Point p)
+        {
+            var r = new Rect(start, p);
+            Canvas.SetLeft(preview, r.X);
+            Canvas.SetTop(preview, r.Y);
+            preview.Width = r.Width;
+            preview.Height = r.Height;
+            preview.Visibility = Visibility.Visible;
+        }
+
+        // 고른 것 둘레의 점선과 손잡이
+        public void Refresh()
+        {
+            bool show = Active && !Capturing && Selected != null && objects.Contains(Selected);
+            var v = show ? Visibility.Visible : Visibility.Collapsed;
+            outline.Visibility = sizeHandle.Visibility = deleteHandle.Visibility = v;
+            if (!show) return;
+            var r = Selected.Rect;
+            Canvas.SetLeft(outline, r.X);
+            Canvas.SetTop(outline, r.Y);
+            outline.Width = r.Width;
+            outline.Height = r.Height;
+            Canvas.SetLeft(sizeHandle, r.Right - 7);
+            Canvas.SetTop(sizeHandle, r.Bottom - 7);
+            Canvas.SetLeft(deleteHandle, r.Right - 11);
+            Canvas.SetTop(deleteHandle, r.Top - 11);
         }
     }
 
