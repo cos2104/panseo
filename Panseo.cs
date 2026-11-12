@@ -2123,7 +2123,7 @@ namespace Panseo
         public RegionMode Region = RegionMode.Move;
         RegionTool regionTool;
         BoardBg captureBg;
-        static readonly Brush MaskBrush = Frozen(Color.FromRgb(0x2B, 0x2D, 0x31));
+        static readonly Brush MaskBrush = Brushes.White; // 가리기 바깥은 흰색
         static readonly Brush ChalkBrush = Frozen(Color.FromRgb(0x1F, 0x3B, 0x2D));
 
         static Brush Frozen(Color c)
@@ -3748,6 +3748,8 @@ namespace Panseo
         readonly BitmapSource image;
         readonly Brush fill;
         readonly Rect baseRect;
+        static readonly Pen MaskEdge = MakeEdge();
+        static Pen MakeEdge() { var p = new Pen(new SolidColorBrush(Color.FromRgb(0xC8, 0xC8, 0xC8)), 1.5); p.Freeze(); return p; }
         Matrix layout = Matrix.Identity;
 
         public BoardObject(ObjKind kind, Rect r, BitmapSource img, Brush fill)
@@ -3781,6 +3783,7 @@ namespace Panseo
                 var outer = r;
                 outer.Inflate(30000, 30000);
                 dc.DrawGeometry(fill, null, new CombinedGeometry(GeometryCombineMode.Exclude, new RectangleGeometry(outer), new RectangleGeometry(r)));
+                dc.DrawRectangle(null, MaskEdge, r); // 흰 화면에서도 보이는 곳 경계가 보이게
             }
         }
 
