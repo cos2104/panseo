@@ -1137,7 +1137,7 @@ namespace Panseo
         public Color PenColor = Color.FromRgb(0xE5, 0x39, 0x35);
         public Color HlColor = Color.FromRgb(0xFD, 0xD8, 0x35);
         public double PenSize = 4;
-        public const string Version = "v32";
+        public const string Version = "v33";
         public BoardBg Bg = BoardBg.Transparent;
         public event Action ToolStateChanged;
         public static readonly double[] PenSizes = { 2, 4, 8 };
@@ -2610,18 +2610,31 @@ namespace Panseo
             DockPanel.SetDock(gear, Dock.Right);
             header.Children.Add(collapse);
             header.Children.Add(gear);
-            // 새 버전이 있을 때만 보이는 업데이트 버튼
-            updateBtn = Flat(Glyph("", 13), "업데이트", 24, 22);
-            updateBtn.Foreground = new SolidColorBrush(Color.FromRgb(0x4A, 0xDE, 0x80));
-            updateBtn.Visibility = Visibility.Collapsed;
-            updateBtn.Click += (s, e) => StartUpdate();
-            DockPanel.SetDock(updateBtn, Dock.Right);
-            header.Children.Add(updateBtn);
             var title = new TextBlock { VerticalAlignment = VerticalAlignment.Center, Cursor = Cursors.SizeAll };
             title.Inlines.Add(new System.Windows.Documents.Run("판서") { Foreground = Fg, FontWeight = FontWeights.Bold, FontSize = 13 });
             title.Inlines.Add(new System.Windows.Documents.Run(" " + OverlayWindow.Version) { Foreground = Sub, FontSize = 10 });
             header.Children.Add(title);
             outer.Children.Add(header);
+            // 새 버전이 있을 때만 머리글 아래에 나오는 초록 띠 단추
+            var updGreen = new SolidColorBrush(Color.FromRgb(0x16, 0xA3, 0x4A));
+            var updHover = new SolidColorBrush(Color.FromRgb(0x22, 0xC5, 0x5E));
+            updateLabel = new TextBlock { Foreground = Brushes.White, FontSize = 12, FontWeight = FontWeights.Bold, VerticalAlignment = VerticalAlignment.Center };
+            var updContent = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Center };
+            var updGlyph = Glyph("", 13);
+            updGlyph.Foreground = Brushes.White;
+            updGlyph.Margin = new Thickness(0, 0, 5, 0);
+            updContent.Children.Add(updGlyph);
+            updContent.Children.Add(updateLabel);
+            updateBtn = new Button
+            {
+                Content = updContent, Height = 30, Margin = new Thickness(2, 2, 2, 6),
+                Background = updGreen, Focusable = false, Cursor = Cursors.Hand, Template = FlatTpl,
+                Visibility = Visibility.Collapsed
+            };
+            updateBtn.MouseEnter += (s, e) => updateBtn.Background = updHover;
+            updateBtn.MouseLeave += (s, e) => updateBtn.Background = updGreen;
+            updateBtn.Click += (s, e) => StartUpdate();
+            outer.Children.Add(updateBtn);
             gear.Click += (s, e) => new HotkeyWindow(ov) { Owner = this }.ShowDialog();
 
             body = new StackPanel();
@@ -2826,6 +2839,7 @@ namespace Panseo
         }
 
         Button updateBtn;
+        TextBlock updateLabel;
         Updater.Release latest;
 
         async void CheckUpdate()
@@ -2835,6 +2849,9 @@ namespace Panseo
             latest = r;
             updateBtn.ToolTip = "새 버전 " + r.Tag + "이(가) 있습니다. 눌러서 업데이트" + (string.IsNullOrEmpty(r.Notes) ? "" : "\n\n" + r.Notes);
             AutomationProperties.SetName(updateBtn, "업데이트 " + r.Tag);
+            updateLabel.Text = r.Tag + " 업데이트";
+            if (updateBtn.Visibility != Visibility.Visible)
+                ov.ShowToast("새 버전 " + r.Tag + "이 나왔습니다 · 도구 모음의 초록 [업데이트] 단추를 누르세요");
             updateBtn.Visibility = Visibility.Visible;
         }
 
